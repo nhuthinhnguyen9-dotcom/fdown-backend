@@ -157,10 +157,10 @@ def download_video(url: str):
 
     except Exception as e:
         err_msg = str(e)
-        if "login.php" in err_msg or "stories" in target_url:
+        if "login.php" in err_msg:
             raise HTTPException(
                 status_code=400,
-                detail="Facebook Story hoặc Video riêng tư yêu cầu đăng nhập. Hệ thống hiện chỉ hỗ trợ Video Công Khai (Public) và Reels!",
+                detail="Video riêng tư yêu cầu đăng nhập. Hệ thống chỉ hỗ trợ Video Công Khai (Public), Reels và Story!",
             )
 
         raise HTTPException(
