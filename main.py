@@ -15,13 +15,14 @@ app.add_middleware(
 
 
 def clean_fb_url(url: str) -> str:
-    """Làm sạch các tham số rác đính kèm từ App Facebook."""
+    """Làm sạch các tham số rác đính kèm từ App Facebook và hỗ trợ chuẩn Story."""
     if not url:
         return url
 
     url = url.strip()
     parsed = urllib.parse.urlparse(url)
 
+    # Đối với Story, giữ nguyên cấu trúc đường dẫn đầy đủ để Facebook không từ chối truy cập
     if "/stories/" in parsed.path:
         return url
 
@@ -61,15 +62,22 @@ def download_video(url: str):
             formats_list = []
             hd_url = None
             sd_url = None
+            audio_url = None
 
-            # Bóc tách link HD và SD chuẩn
+            # Bóc tách link HD, SD chuẩn và tìm riêng luồng audio sạch cho MP3
             if info.get("formats"):
                 for fmt in info["formats"]:
                     format_id = str(fmt.get("format_id", "")).lower()
                     fmt_url = fmt.get("url")
+                    vcodec = fmt.get("vcodec", "none")
+                    acodec = fmt.get("acodec", "none")
 
                     if not fmt_url:
                         continue
+
+                    # Tự động tìm luồng chỉ có tiếng (audio-only) để làm file MP3 chuẩn
+                    if vcodec == "none" and acodec != "none" and not audio_url:
+                        audio_url = fmt_url
 
                     if "hd" in format_id:
                         hd_url = fmt_url
@@ -79,7 +87,7 @@ def download_video(url: str):
             # Lấy URL mặc định nếu không phân biệt được HD/SD
             default_url = info.get("url")
 
-            # 1. Thêm chất lượng HD (Nếu có)
+            # 1. Thêm chất lượng HD
             if hd_url:
                 formats_list.append(
                     {
@@ -90,7 +98,7 @@ def download_video(url: str):
                     }
                 )
 
-            # 2. Thêm chất lượng SD (Nếu có)
+            # 2. Thêm chất lượng SD
             if sd_url:
                 formats_list.append(
                     {
@@ -112,17 +120,17 @@ def download_video(url: str):
                     }
                 )
 
-            # 3. Thêm tùy chọn MP3 (Audio)
-            audio_url = (
-                hd_url or sd_url or default_url
-            )  # Dùng URL video để Frontend tự xử lý lấy audio/chuyển đổi
-            if audio_url:
+            # Xác định nguồn phát cho MP3
+            final_audio_url = audio_url or hd_url or sd_url or default_url
+
+            # 3. Thêm tùy chọn MP3 (Audio thực sự dạng m4a)
+            if final_audio_url:
                 formats_list.append(
                     {
                         "quality": "MP3",
-                        "desc": "Tệp Âm thanh MP3",
-                        "ext": "mp3",
-                        "url": audio_url,
+                        "desc": "Tệp Âm thanh MP3 chuẩn",
+                        "ext": "m4a",
+                        "url": final_audio_url,
                     }
                 )
 
@@ -142,7 +150,7 @@ def download_video(url: str):
                 raise Exception("Không tìm thấy tệp video trực tiếp.")
 
             return {
-                "title": info.get("title") or "Facebook Video",
+                "title": info.get("title") or "Facebook Story / Video",
                 "thumbnail": thumbnail_url,
                 "duration": info.get("duration_string") or "N/A",
                 "formats": formats_list,
@@ -150,13 +158,13 @@ def download_video(url: str):
 
     except Exception as e:
         err_msg = str(e)
-        if "login.php" in err_msg or "stories" in target_url:
+        if "login.php" in err_msg:
             raise HTTPException(
                 status_code=400,
-                detail="Facebook Story hoặc Video riêng tư yêu cầu đăng nhập. Hệ thống hiện chỉ hỗ trợ Video Công Khai (Public) và Reels!",
+                detail="Video riêng tư yêu cầu đăng nhập. Hệ thống chỉ hỗ trợ Video Công Khai (Public), Reels và Story!",
             )
 
         raise HTTPException(
             status_code=400,
-            detail="Không thể bóc tách video này. Vui lòng kiểm tra lại đường link!",
+            detail="Không thể bóc tách nội dung này. Vui lòng kiểm tra lại đường link!",
         )
