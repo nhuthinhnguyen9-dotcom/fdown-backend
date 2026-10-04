@@ -61,10 +61,10 @@ def download_video(url: str):
             formats_list = []
             seen_qualities = set()
             default_url = info.get("url")
+            audio_url = None
 
-            # Quét các định dạng có sẵn, ưu tiên nhận diện thêm 1080p, 2K, 4K nếu Facebook cung cấp link đi kèm âm thanh
+            # 1. Quét các định dạng video (có hỗ trợ 1080p, 2K, 4K nếu có)
             if info.get("formats"):
-                # Sắp xếp từ chất lượng cao xuống thấp dựa theo chiều cao (height)
                 sorted_formats = sorted(
                     info["formats"],
                     key=lambda x: x.get("height") or 0,
@@ -78,14 +78,18 @@ def download_video(url: str):
 
                     height = fmt.get("height") or 0
                     format_id = str(fmt.get("format_id", "")).lower()
+                    vcodec = fmt.get("vcodec", "none")
                     acodec = fmt.get("acodec", "none")
 
-                    # Chỉ lấy các luồng có kèm tiếng (hoặc các luồng chuẩn không bị câm)
-                    if acodec == "none" and height > 720:
+                    # Tìm riêng một link chuyên dụng cho audio (có tiếng gốc sạch sẽ)
+                    if vcodec == "none" and acodec != "none" and not audio_url:
+                        audio_url = fmt_url
+
+                    # Lọc các luồng video
+                    if vcodec == "none":
                         continue
 
                     label = None
-                    # Phân loại nhãn dựa trên thông số thực tế
                     if height >= 2160 or "4k" in format_id:
                         label = "4K Video"
                     elif height >= 1440 or "2k" in format_id:
@@ -108,7 +112,7 @@ def download_video(url: str):
                             }
                         )
 
-            # Nếu bộ lọc thông minh không lấy được, dùng phương án an toàn cơ bản (HD / SD chuẩn)
+            # Nếu không quét được danh sách, dùng link mặc định
             if not formats_list and default_url:
                 formats_list.append(
                     {
@@ -119,19 +123,22 @@ def download_video(url: str):
                     }
                 )
 
-            # 3. Thêm tùy chọn MP3 (Audio)
-            audio_url = formats_list[0]["url"] if formats_list else default_url
+            # Nếu không tìm thấy luồng audio riêng biệt, fallback tạm về link video đầu tiên để lấy tiếng
+            if not audio_url:
+                audio_url = formats_list[0]["url"] if formats_list else default_url
+
+            # 2. Thêm tùy chọn MP3 (Audio thực sự lấy từ luồng âm thanh sạch)
             if audio_url:
                 formats_list.append(
                     {
                         "quality": "MP3",
-                        "desc": "Tệp Âm thanh MP3",
-                        "ext": "mp3",
+                        "desc": "Tệp Âm thanh chuẩn",
+                        "ext": "m4a",  # Dùng m4a/aac gốc của Facebook để trình duyệt nhận diện chính xác là file audio
                         "url": audio_url,
                     }
                 )
 
-            # 4. Thêm tùy chọn Ảnh bìa / Thumbnail
+            # 3. Thêm tùy chọn Ảnh bìa / Thumbnail
             thumbnail_url = info.get("thumbnail")
             if thumbnail_url:
                 formats_list.append(
