@@ -21,45 +21,54 @@ def download_video(url: str):
     if not url:
         raise HTTPException(status_code=400, detail="Thiếu link video")
 
-    try:
-        # Sử dụng API Rapid/Cobalt/SnapSave bypass Facebook
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Accept': 'application/json',
-            'Content-Type': 'application/json'
-        }
-        
-        # Thử gọi API lấy link gốc Facebook
-        api_res = requests.post(
-            "https://co.wuk.sh/api/json",
-            json={"url": url},
-            headers=headers,
-            timeout=12
-        )
-        
-        data = api_res.json()
-        
-        if api_res.status_code == 200 and "url" in data:
-            return {
-                "status": "success",
-                "title": "Facebook Video",
-                "url": data["url"]
-            }
-            
-        # Phương án dự phòng 2 nếu API 1 bị quá tải
-        fb_api = requests.get(f"https://api.v2.snapsave.app/api/download?url={url}", headers=headers, timeout=10)
-        if fb_api.status_code == 200:
-            fb_data = fb_api.json()
-            if "data" in fb_data and len(fb_data["data"]) > 0:
-                video_link = fb_data["data"][0].get("url") or fb_data["data"][0].get("file")
-                if video_link:
+    # Danh sách các Máy chủ Cobalt API công khai để tự động chuyển tiếp nếu 1 server bận
+    cobalt_servers = [
+        "https://api.cobalt.tools",
+        "https://cobalt-api.kwiatekm.com",
+        "https://api.v2.snapsave.app"
+    ]
+
+    headers = {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+    }
+
+    # Thử bóc tách qua Cobalt API
+    for server in cobalt_servers[:2]:
+        try:
+            res = requests.post(
+                server,
+                json={"url": url},
+                headers=headers,
+                timeout=10
+            )
+            if res.status_code == 200:
+                data = res.json()
+                video_url = data.get("url") or data.get("picker", [{}])[0].get("url")
+                if video_url:
                     return {
                         "status": "success",
                         "title": "Facebook Video HD",
-                        "url": video_link
+                        "url": video_url
                     }
+        except Exception:
+            continue
 
-        raise HTTPException(status_code=400, detail="Facebook đã chặn kết nối hoặc video này bị giới hạn quyền riêng tư/quốc gia.")
+    # Phương án dự phòng với TikWM/SnapSave cho Facebook
+    try:
+        res = requests.get(f"https://api.v2.snapsave.app/api/download?url={url}", headers=headers, timeout=10)
+        if res.status_code == 200:
+            data = res.json()
+            if "data" in data and len(data["data"]) > 0:
+                video_url = data["data"][0].get("url") or data["data"][0].get("file")
+                if video_url:
+                    return {
+                        "status": "success",
+                        "title": "Facebook Video",
+                        "url": video_url
+                    }
+    except Exception:
+        pass
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Lỗi hệ thống: {str(e)}")
+    raise HTTPException(status_code=400, detail="Không thể bóc tách link video này. Vui lòng kiểm tra lại link hoặc chắc chắn video ở chế độ Công Khai!")
