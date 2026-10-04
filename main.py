@@ -38,10 +38,11 @@ def download_video(url: str):
 
     target_url = clean_fb_url(url)
 
+    # Cấu hình yt-dlp để lấy các nguồn video tốt nhất có cả tiếng
     ydl_opts = {
         "quiet": True,
         "no_warnings": True,
-        "format": "best",
+        "format": "best[vcodec!=none][acodec!=none]/best",
         "http_headers": {
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -59,74 +60,77 @@ def download_video(url: str):
                 info = info["entries"][0]
 
             formats_list = []
-            hd_url = None
-            sd_url = None
-
-            # Bóc tách link HD và SD chuẩn
-            if info.get("formats"):
-                for fmt in info["formats"]:
-                    format_id = str(fmt.get("format_id", "")).lower()
-                    fmt_url = fmt.get("url")
-
-                    if not fmt_url:
-                        continue
-
-                    if "hd" in format_id:
-                        hd_url = fmt_url
-                    elif "sd" in format_id:
-                        sd_url = fmt_url
-
-            # Lấy URL mặc định nếu không phân biệt được HD/SD
+            seen_labels = set()
             default_url = info.get("url")
 
-            # 1. Thêm chất lượng HD (Nếu có)
-            if hd_url:
-                formats_list.append(
-                    {
-                        "quality": "HD Video",
-                        "desc": "Tệp Video HD chất lượng cao",
-                        "ext": "mp4",
-                        "url": hd_url,
-                    }
+            # Quét các định dạng video và phân loại thông minh theo độ phân giải
+            if info.get("formats"):
+                sorted_formats = sorted(
+                    info["formats"],
+                    key=lambda x: x.get("height") or 0,
+                    reverse=True,
                 )
 
-            # 2. Thêm chất lượng SD (Nếu có)
-            if sd_url:
-                formats_list.append(
-                    {
-                        "quality": "SD Video",
-                        "desc": "Tệp Video SD chất lượng tiêu chuẩn",
-                        "ext": "mp4",
-                        "url": sd_url,
-                    }
-                )
+                for fmt in sorted_formats:
+                    fmt_url = fmt.get("url")
+                    vcodec = fmt.get("vcodec", "none")
+                    acodec = fmt.get("acodec", "none")
 
-            # Nếu không tìm thấy HD/SD riêng biệt, lấy link video chính
+                    if not fmt_url or vcodec == "none":
+                        continue
+
+                    height = fmt.get("height") or 0
+                    format_id = str(fmt.get("format_id", "")).lower()
+
+                    # Phân loại nhãn chi tiết bao gồm cả 1080p, 2K, 4K
+                    if height >= 2160 or "4k" in format_id:
+                        label = "4K Video"
+                    elif height >= 1440 or "2k" in format_id:
+                        label = "2K Video"
+                    elif height >= 1080 or "hd" in format_id and height >= 1000:
+                        label = "1080p Full HD"
+                    elif height >= 720 or "hd" in format_id:
+                        label = "720p HD"
+                    elif height > 0:
+                        label = f"{height}p SD"
+                    else:
+                        continue
+
+                    if label not in seen_labels:
+                        seen_labels.add(label)
+                        formats_list.append(
+                            {
+                                "quality": label,
+                                "desc": f"Tệp Video MP4 ({label}) - Có tiếng",
+                                "ext": "mp4",
+                                "url": fmt_url,
+                            }
+                        )
+
+            # Nếu không quét được danh sách, dùng link mặc định
             if not formats_list and default_url:
                 formats_list.append(
                     {
                         "quality": "HD / SD Video",
-                        "desc": "Tệp Video MP4 gốc",
+                        "desc": "Tệp Video MP4 gốc - Có tiếng",
                         "ext": "mp4",
                         "url": default_url,
                     }
                 )
 
-            # 3. Thêm tùy chọn MP3 (Audio)
-            audio_url = (
-                hd_url or sd_url or default_url
-            )  # Dùng URL video để Frontend tự xử lý lấy audio/chuyển đổi
+            # Thêm tùy chọn MP3 (Audio)
+            audio_url = formats_list[0]["url"] if formats_list else default_url
             if audio_url:
                 formats_list.append(
                     {
                         "quality": "MP3",
-                        "desc": "Tệp Âm thanh MP3",
+                        "desc": "Tệp Âm thanh MP3 chuẩn",
                         "ext": "mp3",
                         "url": audio_url,
                     }
                 )
 
-            # 4. Thêm tùy chọn Ảnh bìa / Thumbnail
+            # Thêm tùy chọn Hình ảnh (Thumbnail)
             thumbnail_url = info.get("thumbnail")
             if thumbnail_url:
                 formats_list.append(
