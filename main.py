@@ -15,14 +15,14 @@ app.add_middleware(
 
 
 def clean_fb_url(url: str) -> str:
-    """Làm sạch các tham số rác đính kèm từ App Facebook và hỗ trợ chuẩn Story."""
+    """Làm sạch tham số rác nhưng giữ nguyên đường dẫn nếu là Story."""
     if not url:
         return url
 
     url = url.strip()
     parsed = urllib.parse.urlparse(url)
 
-    # Đối với Story, giữ nguyên cấu trúc đường dẫn đầy đủ để Facebook không từ chối truy cập
+    # Giữ nguyên nguyên bản URL đối với Story để tránh bị lỗi bóc tách
     if "/stories/" in parsed.path:
         return url
 
@@ -123,7 +123,7 @@ def download_video(url: str):
             # Xác định nguồn phát cho MP3
             final_audio_url = audio_url or hd_url or sd_url or default_url
 
-            # 3. Thêm tùy chọn MP3 (Audio thực sự dạng m4a)
+            # 3. Thêm tùy chọn MP3 (Audio thực sự dưới dạng m4a)
             if final_audio_url:
                 formats_list.append(
                     {
@@ -150,7 +150,7 @@ def download_video(url: str):
                 raise Exception("Không tìm thấy tệp video trực tiếp.")
 
             return {
-                "title": info.get("title") or "Facebook Story / Video",
+                "title": info.get("title") or "Facebook Media",
                 "thumbnail": thumbnail_url,
                 "duration": info.get("duration_string") or "N/A",
                 "formats": formats_list,
@@ -161,7 +161,7 @@ def download_video(url: str):
         if "login.php" in err_msg:
             raise HTTPException(
                 status_code=400,
-                detail="Video riêng tư yêu cầu đăng nhập. Hệ thống chỉ hỗ trợ Video Công Khai (Public), Reels và Story!",
+                detail="Video riêng tư yêu cầu đăng nhập. Hệ thống hỗ trợ Video Công Khai (Public), Reels và Story!",
             )
 
         raise HTTPException(
