@@ -21,17 +21,15 @@ def download_video(url: str):
     if not url:
         raise HTTPException(status_code=400, detail="Thiếu link video")
 
-    # Lọc sạch tham số rác từ Facebook URL
-    clean_url = url.split('?')[0].split('&')[0]
+    # Tự động hỗ trợ cả link Reels, Watch, Video thường
+    clean_url = url.strip()
 
-    # Giả lập Trình duyệt Safari di động để bypass tường lửa
     ydl_opts = {
         'quiet': True,
         'no_warnings': True,
         'format': 'best',
         'http_headers': {
             'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 16_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.5 Mobile/15E148 Safari/604.1',
-            'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
             'Accept-Language': 'vi-VN,vi;q=0.9,en-US;q=0.8,en;q=0.7',
         },
         'check_formats': False,
@@ -50,11 +48,11 @@ def download_video(url: str):
 
             return {
                 "status": "success",
-                "title": info.get('title', 'Facebook Video'),
+                "title": info.get('title', 'Facebook Video / Reels'),
                 "url": video_url
             }
     except Exception as e:
         err = str(e)
         if "Unsupported URL" in err:
-            raise HTTPException(status_code=400, detail="Đường dẫn không hợp lệ hoặc Video/Reels ở chế độ Riêng tư.")
+            raise HTTPException(status_code=400, detail="Đường dẫn Reels/Video không hợp lệ hoặc ở chế độ Riêng tư.")
         raise HTTPException(status_code=500, detail=f"Lỗi bóc tách: {err}")
