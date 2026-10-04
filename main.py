@@ -22,39 +22,44 @@ def download_video(url: str):
         raise HTTPException(status_code=400, detail="Thiếu link video")
 
     try:
-        # Sử dụng API bóc tách Facebook chuyên dụng
-        api_url = f"https://api.v2.snapsave.app/api/download?url={url}"
-        
+        # Sử dụng API Rapid/Cobalt/SnapSave bypass Facebook
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-            'Referer': 'https://snapsave.app/'
+            'Accept': 'application/json',
+            'Content-Type': 'application/json'
         }
         
-        # Gọi sang API giải mã Facebook
-        response = requests.get(f"https://fdown.net/download.php", params={'url': url}, headers=headers, timeout=10)
+        # Thử gọi API lấy link gốc Facebook
+        api_res = requests.post(
+            "https://co.wuk.sh/api/json",
+            json={"url": url},
+            headers=headers,
+            timeout=12
+        )
         
-        # Nếu muốn dùng giải pháp thuần Python bóc tách link gốc HD/SD
-        import re
-        html = response.text
+        data = api_res.json()
         
-        # Rút trích link HD hoặc SD từ FB
-        hd_match = re.search(r'hd_src:"([^"]+)"', html)
-        sd_match = re.search(r'sd_src:"([^"]+)"', html)
-        
-        video_url = None
-        if hd_match:
-            video_url = hd_match.group(1)
-        elif sd_match:
-            video_url = sd_match.group(1)
+        if api_res.status_code == 200 and "url" in data:
+            return {
+                "status": "success",
+                "title": "Facebook Video",
+                "url": data["url"]
+            }
             
-        if not video_url:
-            raise HTTPException(status_code=400, detail="Không thể bóc tách link video này. Vui lòng đảm bảo đây là Video/Reels công khai!")
+        # Phương án dự phòng 2 nếu API 1 bị quá tải
+        fb_api = requests.get(f"https://api.v2.snapsave.app/api/download?url={url}", headers=headers, timeout=10)
+        if fb_api.status_code == 200:
+            fb_data = fb_api.json()
+            if "data" in fb_data and len(fb_data["data"]) > 0:
+                video_link = fb_data["data"][0].get("url") or fb_data["data"][0].get("file")
+                if video_link:
+                    return {
+                        "status": "success",
+                        "title": "Facebook Video HD",
+                        "url": video_link
+                    }
 
-        return {
-            "status": "success",
-            "title": "Facebook Video",
-            "url": video_url
-        }
+        raise HTTPException(status_code=400, detail="Facebook đã chặn kết nối hoặc video này bị giới hạn quyền riêng tư/quốc gia.")
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Lỗi máy chủ: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Lỗi hệ thống: {str(e)}")
