@@ -1,7 +1,6 @@
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 import yt_dlp
-import re
 
 app = FastAPI()
 
@@ -22,10 +21,10 @@ def download_video(url: str):
     if not url:
         raise HTTPException(status_code=400, detail="Thiếu link video")
 
-    # Lọc sạch tham số rác từ Facebook URL (chỉ giữ lại ID bài viết/video)
+    # Lọc sạch tham số rác từ Facebook URL
     clean_url = url.split('?')[0].split('&')[0]
 
-    # Giả lập Trình duyệt Safari trên iPhone để Facebook trả về stream video đơn giản
+    # Giả lập Trình duyệt Safari di động để bypass tường lửa
     ydl_opts = {
         'quiet': True,
         'no_warnings': True,
@@ -42,10 +41,8 @@ def download_video(url: str):
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(clean_url, download=False)
             
-            # Trích xuất đường dẫn MP4 trực tiếp
             video_url = info.get('url')
             if not video_url and 'formats' in info and len(info['formats']) > 0:
-                # Chọn chất lượng tốt nhất
                 video_url = info['formats'][-1].get('url')
 
             if not video_url:
@@ -60,4 +57,4 @@ def download_video(url: str):
         err = str(e)
         if "Unsupported URL" in err:
             raise HTTPException(status_code=400, detail="Đường dẫn không hợp lệ hoặc Video/Reels ở chế độ Riêng tư.")
-        raise HTTPException(status_code=500, detail=f"Lỗi máy chủ: {err}")
+        raise HTTPException(status_code=500, detail=f"Lỗi bóc tách: {err}")
