@@ -1,10 +1,12 @@
-from fastapi import FastAPI, HTTPException, Query
+import urllib.parse
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+import requests
 import yt_dlp
 
 app = FastAPI()
 
-# Cấu hình CORS cho phép Vercel / Frontend gọi API
+# Cấu hình CORS để giao diện Blogger gọi API không bị chặn
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -13,81 +15,88 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-@app.get("/")
-def home():
-    return {"status": "ok", "message": "fbdowload API is running!"}
 
-@app.get("/api/download")
-def download_facebook(url: str = Query(..., description="Facebook Video URL")):
+# 1. HÀM XỬ LÝ & RÚT GỌN URL (Chèn đoạn code này ở đây)
+def clean_and_resolve_fb_url(url: str) -> str:
     try:
-        ydl_opts = {
-            'quiet': True,
-            'no_warnings': True,
-            'format': 'best',
+        # Cắt bỏ các tham số rác từ app mobile (mibextid, source, fbclid, ...)
+        parsed = urllib.parse.urlparse(url)
+        clean_url = urllib.parse.urlunparse(
+            (parsed.scheme, parsed.netloc, parsed.path, "", "", "")
+        )
+
+        # Gửi request để tự động Follow Redirect (chuyển hướng link từ App về link chuẩn)
+        headers = {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                " (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            )
         }
 
+        response = requests.head(
+            clean_url, allow_redirects=True, timeout=5, headers=headers
+        )
+        final_url = response.url
+
+        # Làm sạch tham số một lần nữa sau khi đã redirect xong
+        parsed_final = urllib.parse.urlparse(final_url)
+        return urllib.parse.urlunparse(
+            (
+                parsed_final.scheme,
+                parsed_final.netloc,
+                parsed_final.path,
+                "",
+                "",
+                "",
+            )
+        )
+    except Exception:
+        return url
+
+
+# 2. ENDPOINT API TẢI VIDEO
+@app.get("/api/download")
+def download_video(url: str):
+    if not url:
+        raise HTTPException(
+            status_code=400, detail="Vui lòng cung cấp URL video!"
+        )
+
+    # ---> TỰ ĐỘNG LÀM SẠCH VÀ LẤY LINK CHUẨN TỪ APP TẠI ĐÂY <---
+    target_url = clean_and_resolve_fb_url(url)
+
+    ydl_opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "format": "best",
+    }
+
+    try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            
-            title = info.get('title', 'Facebook Video')
-            thumbnail = info.get('thumbnail', '')
-            duration = info.get('duration_string', '')
-            
+            info = ydl.extract_info(target_url, download=False)
+
+            # Lấy thông tin video trả về cho Frontend Blogger
             formats_list = []
-            
-            # 1. Tải HÌNH ẢNH (Cover Photo / Thumbnail HD)
-            if thumbnail:
-                formats_list.append({
-                    "quality": "IMAGE HD",
-                    "desc": "Ảnh đại diện / Ảnh bìa HD",
-                    "ext": "JPG",
-                    "url": thumbnail
-                })
 
-            # 2. Tải Video SD (mặc định)
-            if 'url' in info:
-                formats_list.append({
-                    "quality": "SD 360P",
-                    "desc": "Video chất lượng tiêu chuẩn (SD)",
-                    "ext": "MP4",
-                    "url": info['url']
-                })
-            
-            # 3. Tải Video HD (nếu video gốc có bản HD)
-            for f in info.get('formats', []):
-                if f.get('height') and f.get('height') >= 720:
-                    formats_list.append({
-                        "quality": f"HD {f.get('height')}P",
-                        "desc": "Video chất lượng cao (HD)",
-                        "ext": "MP4",
-                        "url": f.get('url')
-                    })
-                    break
-
-            # 4. Tải riêng Âm thanh MP3 (Chỉ lấy luồng audio vcodec == 'none')
-            audio_url = None
-            for f in info.get('formats', []):
-                if f.get('vcodec') == 'none' and f.get('acodec') != 'none':
-                    audio_url = f.get('url')
-                    break
-            
-            # Nếu không tách riêng được luồng audio, lấy link stream chính
-            if not audio_url and 'url' in info:
-                audio_url = info['url']
-
-            formats_list.append({
-                "quality": "AUDIO MP3",
-                "desc": "Âm thanh MP3 thuần túy",
-                "ext": "MP3",
-                "url": audio_url
-            })
+            # Thêm định dạng Video
+            formats_list.append(
+                {
+                    "quality": "HD / SD Video",
+                    "desc": "Tệp Video MP4 gốc",
+                    "ext": "mp4",
+                    "url": info.get("url"),
+                }
+            )
 
             return {
-                "title": title,
-                "thumbnail": thumbnail,
-                "duration": duration,
-                "formats": formats_list
+                "title": info.get("title", "Facebook Video"),
+                "thumbnail": info.get("thumbnail"),
+                "duration": info.get("duration_string", "N/A"),
+                "formats": formats_list,
             }
 
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Lỗi bóc tách video: {str(e)}")
+        raise HTTPException(
+            status_code=400,
+            detail="Không thể bóc tách video. Vui lòng kiểm tra lại xem video có ở chế độ Công khai (Public) hay không!",
+        )
