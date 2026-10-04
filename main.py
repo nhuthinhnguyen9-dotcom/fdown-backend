@@ -15,13 +15,14 @@ app.add_middleware(
 
 
 def clean_fb_url(url: str) -> str:
-    """Làm sạch các tham số rác đính kèm từ App Facebook."""
+    """Làm sạch các tham số rác đính kèm từ App Facebook và hỗ trợ chuẩn Story."""
     if not url:
         return url
 
     url = url.strip()
     parsed = urllib.parse.urlparse(url)
 
+    # Đối với Story, giữ nguyên cấu trúc đường dẫn đầy đủ để Facebook không từ chối truy cập
     if "/stories/" in parsed.path:
         return url
 
@@ -86,7 +87,7 @@ def download_video(url: str):
             # Lấy URL mặc định nếu không phân biệt được HD/SD
             default_url = info.get("url")
 
-            # 1. Thêm chất lượng HD (Giữ nguyên bản chuẩn chạy mượt có tiếng)
+            # 1. Thêm chất lượng HD
             if hd_url:
                 formats_list.append(
                     {
@@ -97,7 +98,7 @@ def download_video(url: str):
                     }
                 )
 
-            # 2. Thêm chất lượng SD (Giữ nguyên bản chuẩn chạy mượt có tiếng)
+            # 2. Thêm chất lượng SD
             if sd_url:
                 formats_list.append(
                     {
@@ -119,16 +120,16 @@ def download_video(url: str):
                     }
                 )
 
-            # Xác định nguồn phát cho MP3 (ưu tiên luồng audio sạch, nếu không có thì dùng link video)
+            # Xác định nguồn phát cho MP3
             final_audio_url = audio_url or hd_url or sd_url or default_url
 
-            # 3. Thêm tùy chọn MP3 (Audio thực sự)
+            # 3. Thêm tùy chọn MP3 (Audio thực sự dạng m4a)
             if final_audio_url:
                 formats_list.append(
                     {
                         "quality": "MP3",
                         "desc": "Tệp Âm thanh MP3 chuẩn",
-                        "ext": "m4a",  # Định dạng chuẩn giúp trình duyệt tải về là file nhạc
+                        "ext": "m4a",
                         "url": final_audio_url,
                     }
                 )
@@ -149,7 +150,7 @@ def download_video(url: str):
                 raise Exception("Không tìm thấy tệp video trực tiếp.")
 
             return {
-                "title": info.get("title") or "Facebook Video",
+                "title": info.get("title") or "Facebook Story / Video",
                 "thumbnail": thumbnail_url,
                 "duration": info.get("duration_string") or "N/A",
                 "formats": formats_list,
@@ -165,5 +166,5 @@ def download_video(url: str):
 
         raise HTTPException(
             status_code=400,
-            detail="Không thể bóc tách video này. Vui lòng kiểm tra lại đường link!",
+            detail="Không thể bóc tách nội dung này. Vui lòng kiểm tra lại đường link!",
         )
