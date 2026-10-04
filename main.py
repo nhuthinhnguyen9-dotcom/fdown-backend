@@ -29,26 +29,6 @@ def clean_fb_url(url: str) -> str:
     return clean_url
 
 
-def get_resolution_label(height: int, format_id: str = "") -> str:
-    """Xác định nhãn chất lượng dựa trên chiều cao khung hình (height)."""
-    if height >= 2160:
-        return "4K Video"
-    elif height >= 1440:
-        return "2K Video"
-    elif height >= 1080:
-        return "1080p Full HD"
-    elif height >= 720:
-        return "720p HD"
-    elif height >= 480:
-        return "480p SD"
-    elif height >= 360:
-        return "360p SD"
-    else:
-        if "hd" in format_id.lower():
-            return "HD Video"
-        return "SD Video"
-
-
 @app.get("/api/download")
 def download_video(url: str):
     if not url:
@@ -58,10 +38,12 @@ def download_video(url: str):
 
     target_url = clean_fb_url(url)
 
+    # Cấu hình tối ưu để yt-dlp ép chọn các định dạng CÓ CẢ HÌNH VÀ TIẾNG (progressive/muxed)
     ydl_opts = {
         "quiet": True,
         "no_warnings": True,
-        "format": "best",
+        # Ưu tiên lấy định dạng có sẵn cả video và audio (tránh bị tách rời hình và tiếng)
+        "format": "best[vcodec!=none][acodec!=none]/best",
         "http_headers": {
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -79,11 +61,13 @@ def download_video(url: str):
                 info = info["entries"][0]
 
             formats_list = []
-            seen_qualities = set()
+            default_url = info.get("url")
+            thumbnail_url = info.get("thumbnail")
 
-            # 1. Duyệt qua các định dạng video khả thi từ Facebook
+            # 1. Lọc các định dạng chuẩn có sẵn cả hình và tiếng từ Facebook
             if info.get("formats"):
-                # Sắp xếp các format theo độ phân giải từ cao xuống thấp
+                seen_qualities = set()
+                # Sắp xếp từ chất lượng cao xuống thấp
                 sorted_formats = sorted(
                     info["formats"],
                     key=lambda x: x.get("height") or 0,
@@ -92,57 +76,62 @@ def download_video(url: str):
 
                 for fmt in sorted_formats:
                     fmt_url = fmt.get("url")
-                    if not fmt_url:
+                    vcodec = fmt.get("vcodec", "none")
+                    acodec = fmt.get("acodec", "none")
+
+                    # BẮT BUỘC: Phải có cả hình (vcodec) và tiếng (acodec) thì mới đưa vào danh sách
+                    if not fmt_url or vcodec == "none" or acodec == "none":
                         continue
 
                     height = fmt.get("height") or 0
-                    format_id = str(fmt.get("format_id", ""))
 
-                    # Chỉ lấy các bản ghi có chứa cả Video + Audio hoặc các định dạng chuẩn
-                    quality_label = get_resolution_label(height, format_id)
+                    # Gán nhãn chất lượng dựa theo độ phân giải thực tế
+                    if height >= 1080:
+                        label = "1080p Full HD"
+                    elif height >= 720:
+                        label = "720p HD"
+                    elif height > 0:
+                        label = f"{height}p SD"
+                    else:
+                        label = "SD Video"
 
-                    # Lọc trùng chất lượng để danh sách không bị rác
-                    if quality_label not in seen_qualities:
-                        seen_qualities.add(quality_label)
+                    if label not in seen_qualities:
+                        seen_qualities.add(label)
                         formats_list.append(
                             {
-                                "quality": quality_label,
-                                "desc": f"Tệp Video MP4 ({quality_label})",
+                                "quality": label,
+                                "desc": f"Tệp Video MP4 ({label}) - Có tiếng",
                                 "ext": "mp4",
                                 "url": fmt_url,
                             }
                         )
 
-            # 2. Nếu không tìm thấy format trong danh sách, dùng link gốc mặc định
-            default_url = info.get("url")
+            # 2. Nếu không lọc được định dạng chi tiết, dùng link mặc định (best)
             if not formats_list and default_url:
                 formats_list.append(
                     {
                         "quality": "HD / SD Video",
-                        "desc": "Tệp Video MP4 gốc",
+                        "desc": "Tệp Video MP4 gốc - Có tiếng",
                         "ext": "mp4",
                         "url": default_url,
                     }
                 )
 
-            # 3. Tùy chọn MP3 (Lấy đường dẫn âm thanh)
-            audio_url = (
-                formats_list[0]["url"]
-                if formats_list
-                else (default_url or target_url)
+            # 3. Tùy chọn MP3 (Sử dụng link video có tiếng tốt nhất làm nguồn audio)
+            audio_source_url = (
+                formats_list[0]["url"] if formats_list else default_url
             )
-            if audio_url:
+            if audio_source_url:
                 formats_list.append(
                     {
                         "quality": "MP3",
-                        "desc": "Tệp Âm thanh MP3",
+                        "desc": "Tệp Âm thanh MP3 chuẩn",
                         "ext": "mp3",
-                        "url": audio_url,
+                        "url": audio_source_url,
                     }
                 )
 
             # 4. Tùy chọn Ảnh bìa (Thumbnail)
-            thumbnail_url = info.get("thumbnail")
             if thumbnail_url:
                 formats_list.append(
                     {
