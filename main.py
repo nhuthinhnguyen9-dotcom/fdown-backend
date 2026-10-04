@@ -35,35 +35,43 @@ def download_facebook(url: str = Query(..., description="Facebook Video URL")):
             
             formats_list = []
             
-            # 1. Lấy link Video SD (mặc định)
+            # 1. Tải HÌNH ẢNH (Cover Photo / Thumbnail HD)
+            if thumbnail:
+                formats_list.append({
+                    "quality": "IMAGE HD",
+                    "desc": "Ảnh đại diện / Ảnh bìa HD",
+                    "ext": "JPG",
+                    "url": thumbnail
+                })
+
+            # 2. Tải Video SD (mặc định)
             if 'url' in info:
                 formats_list.append({
                     "quality": "SD 360P",
-                    "desc": "Chất lượng tiêu chuẩn (SD)",
+                    "desc": "Video chất lượng tiêu chuẩn (SD)",
                     "ext": "MP4",
                     "url": info['url']
                 })
             
-            # 2. Lấy link Video HD (nếu có)
+            # 3. Tải Video HD (nếu video gốc có bản HD)
             for f in info.get('formats', []):
                 if f.get('height') and f.get('height') >= 720:
                     formats_list.append({
                         "quality": f"HD {f.get('height')}P",
-                        "desc": "Chất lượng cao (HD)",
+                        "desc": "Video chất lượng cao (HD)",
                         "ext": "MP4",
                         "url": f.get('url')
                     })
                     break
 
-            # 3. Lọc riêng luồng Audio thuần túy (vcodec == 'none') để không bị dính video
+            # 4. Tải riêng Âm thanh MP3 (Chỉ lấy luồng audio vcodec == 'none')
             audio_url = None
             for f in info.get('formats', []):
-                # Chọn format chỉ có audio, không có hình ảnh
                 if f.get('vcodec') == 'none' and f.get('acodec') != 'none':
                     audio_url = f.get('url')
                     break
             
-            # Nếu không tìm thấy luồng audio riêng, dùng link mặc định
+            # Nếu không tách riêng được luồng audio, lấy link stream chính
             if not audio_url and 'url' in info:
                 audio_url = info['url']
 
