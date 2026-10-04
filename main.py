@@ -1,12 +1,10 @@
 import urllib.parse
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-import requests
 import yt_dlp
 
 app = FastAPI()
 
-# Cấu hình CORS để giao diện Blogger gọi API không bị chặn
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -16,45 +14,26 @@ app.add_middleware(
 )
 
 
-# 1. HÀM XỬ LÝ & RÚT GỌN URL (Chèn đoạn code này ở đây)
-def clean_and_resolve_fb_url(url: str) -> str:
-    try:
-        # Cắt bỏ các tham số rác từ app mobile (mibextid, source, fbclid, ...)
-        parsed = urllib.parse.urlparse(url)
-        clean_url = urllib.parse.urlunparse(
-            (parsed.scheme, parsed.netloc, parsed.path, "", "", "")
-        )
-
-        # Gửi request để tự động Follow Redirect (chuyển hướng link từ App về link chuẩn)
-        headers = {
-            "User-Agent": (
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
-                " (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            )
-        }
-
-        response = requests.head(
-            clean_url, allow_redirects=True, timeout=5, headers=headers
-        )
-        final_url = response.url
-
-        # Làm sạch tham số một lần nữa sau khi đã redirect xong
-        parsed_final = urllib.parse.urlparse(final_url)
-        return urllib.parse.urlunparse(
-            (
-                parsed_final.scheme,
-                parsed_final.netloc,
-                parsed_final.path,
-                "",
-                "",
-                "",
-            )
-        )
-    except Exception:
+def clean_fb_url(url: str) -> str:
+    """Làm sạch URL Facebook từ App mà không làm hỏng link Story/Reels."""
+    if not url:
         return url
 
+    # Nếu là link chia sẻ rút gọn fb.watch hoặc facebook.com/share/
+    # hãy giữ nguyên để yt-dlp tự follow
+    parsed = urllib.parse.urlparse(url)
 
-# 2. ENDPOINT API TẢI VIDEO
+    # Nếu là Story, giữ nguyên đường dẫn
+    if "/stories/" in parsed.path:
+        return url.split("&")[0]  # Chỉ xóa tham số theo dõi ứng dụng ở cuối
+
+    # Nếu là video/reels thông thường, xóa các tham số rác như mibextid, fbclid
+    clean_path = parsed.path
+    clean_url = f"{parsed.scheme}://www.facebook.com{clean_path}"
+
+    return clean_url
+
+
 @app.get("/api/download")
 def download_video(url: str):
     if not url:
@@ -62,41 +41,77 @@ def download_video(url: str):
             status_code=400, detail="Vui lòng cung cấp URL video!"
         )
 
-    # ---> TỰ ĐỘNG LÀM SẠCH VÀ LẤY LINK CHUẨN TỪ APP TẠI ĐÂY <---
-    target_url = clean_and_resolve_fb_url(url)
+    # Xử lý làm sạch link
+    target_url = clean_fb_url(url.strip())
 
+    # Cấu hình yt-dlp tối ưu cho Facebook & Story
     ydl_opts = {
         "quiet": True,
         "no_warnings": True,
         "format": "best",
+        "http_headers": {
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                " (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            ),
+            "Accept-Language": "en-US,en;q=0.9",
+        },
     }
 
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(target_url, download=False)
 
-            # Lấy thông tin video trả về cho Frontend Blogger
+            # Trường hợp link là playlist/nhiều story, lấy item đầu tiên
+            if "entries" in info and len(info["entries"]) > 0:
+                info = info["entries"][0]
+
             formats_list = []
 
-            # Thêm định dạng Video
-            formats_list.append(
-                {
-                    "quality": "HD / SD Video",
-                    "desc": "Tệp Video MP4 gốc",
-                    "ext": "mp4",
-                    "url": info.get("url"),
-                }
-            )
+            # Nếu lấy được URL video trực tiếp
+            video_url = info.get("url")
+            if video_url:
+                formats_list.append(
+                    {
+                        "quality": "HD / SD Video",
+                        "desc": "Tệp Video MP4 gốc",
+                        "ext": "mp4",
+                        "url": video_url,
+                    }
+                )
+
+            # Lấy các định dạng chất lượng khác nếu có
+            if info.get("formats"):
+                for fmt in info["formats"]:
+                    if fmt.get("url") and fmt.get("vcodec") != "none":
+                        quality_label = fmt.get(
+                            "format_note"
+                        ) or f"{fmt.get('height', 'SD')}p"
+                        # Tránh trùng lặp URL
+                        if not any(
+                            f["url"] == fmt["url"] for f in formats_list
+                        ):
+                            formats_list.append(
+                                {
+                                    "quality": f"{quality_label}".upper(),
+                                    "desc": f"Video MP4 ({quality_label})",
+                                    "ext": "mp4",
+                                    "url": fmt["url"],
+                                }
+                            )
+
+            if not formats_list:
+                raise Exception("Không tìm thấy tệp video trực tiếp.")
 
             return {
-                "title": info.get("title", "Facebook Video"),
+                "title": info.get("title") or "Facebook Video / Story",
                 "thumbnail": info.get("thumbnail"),
-                "duration": info.get("duration_string", "N/A"),
+                "duration": info.get("duration_string") or "N/A",
                 "formats": formats_list,
             }
 
     except Exception as e:
         raise HTTPException(
             status_code=400,
-            detail="Không thể bóc tách video. Vui lòng kiểm tra lại xem video có ở chế độ Công khai (Public) hay không!",
+            detail=f"Không thể bóc tách video. Lỗi: {str(e)}",
         )
