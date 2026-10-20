@@ -1,82 +1,48 @@
-import logging
 import urllib.parse
-
-import yt_dlp
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger("fbdl")
+import yt_dlp
 
 app = FastAPI()
 
-# Nên thay "*" bằng domain web của bạn khi đưa lên chạy thật.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=False,  # "*" + credentials=True là cấu hình không an toàn
-    allow_methods=["GET"],
+    allow_credentials=True,
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
-FB_HOSTS = {
-    "facebook.com",
-    "www.facebook.com",
-    "m.facebook.com",
-    "web.facebook.com",
-    "mbasic.facebook.com",
-}
-SHORT_HOSTS = {"fb.watch"}
-# Chỉ giữ lại các tham số thật sự định danh video (vd: /watch/?v=123).
-KEEP_QUERY = {"v", "story_fbid", "id", "set"}
 
-
-def clean_fb_url(url: str):
-    """Làm sạch link Facebook. Trả về None nếu không phải link Facebook."""
-    url = (url or "").strip()
-    parsed = urllib.parse.urlparse(url)
-    host = (parsed.hostname or "").lower()
-
-    if parsed.scheme not in ("http", "https"):
-        return None
-
-    # Link rút gọn fb.watch phải giữ nguyên, nếu đổi sang facebook.com sẽ hỏng.
-    if host in SHORT_HOSTS:
+def clean_fb_url(url: str) -> str:
+    """Làm sạch các tham số rác đính kèm từ App Facebook và hỗ trợ chuẩn Story."""
+    if not url:
         return url
 
-    if host not in FB_HOSTS:
-        return None
+    url = url.strip()
+    parsed = urllib.parse.urlparse(url)
 
-    # Story: giữ nguyên toàn bộ.
+    # Đối với Story, giữ nguyên cấu trúc đường dẫn đầy đủ để Facebook không từ chối truy cập
     if "/stories/" in parsed.path:
         return url
 
-    kept = [(k, v) for k, v in urllib.parse.parse_qsl(parsed.query) if k in KEEP_QUERY]
-    return urllib.parse.urlunparse(
-        ("https", "www.facebook.com", parsed.path, "", urllib.parse.urlencode(kept), "")
-    )
-
-
-def is_progressive(fmt: dict) -> bool:
-    """Định dạng có cả hình và tiếng trong cùng một file."""
-    return fmt.get("vcodec") not in (None, "none") and fmt.get("acodec") not in (None, "none")
+    clean_url = f"{parsed.scheme}://www.facebook.com{parsed.path}"
+    return clean_url
 
 
 @app.get("/api/download")
 def download_video(url: str):
     if not url:
-        raise HTTPException(status_code=400, detail="Vui lòng cung cấp URL video!")
+        raise HTTPException(
+            status_code=400, detail="Vui lòng cung cấp URL video!"
+        )
 
     target_url = clean_fb_url(url)
-    if not target_url:
-        raise HTTPException(status_code=400, detail="Đây không phải link Facebook hợp lệ.")
 
-    # Không đặt "format": "best". Facebook thường tách riêng luồng hình và tiếng,
-    # nên "best" (chỉ nhận file đã có cả hai) có thể báo "format not available".
     ydl_opts = {
         "quiet": True,
         "no_warnings": True,
-        "noplaylist": True,
+        "format": "best",
         "http_headers": {
             "User-Agent": (
                 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
@@ -89,79 +55,115 @@ def download_video(url: str):
     try:
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(target_url, download=False)
+
             if "entries" in info and len(info["entries"]) > 0:
                 info = info["entries"][0]
 
-            formats = [f for f in (info.get("formats") or []) if f.get("url")]
-            progressive = [f for f in formats if is_progressive(f)]
-            video_only = [
-                f for f in formats
-                if f.get("vcodec") not in (None, "none") and f.get("acodec") in (None, "none")
-            ]
-            audio_only = [
-                f for f in formats
-                if f.get("vcodec") in (None, "none") and f.get("acodec") not in (None, "none")
-            ]
+            formats_list = []
+            hd_url = None
+            sd_url = None
+            audio_url = None
 
-            def best_by_height(items):
-                return max(items, key=lambda f: (f.get("height") or 0, f.get("tbr") or 0), default=None)
+            # Bóc tách link HD, SD chuẩn và tìm riêng luồng audio sạch cho MP3
+            if info.get("formats"):
+                for fmt in info["formats"]:
+                    format_id = str(fmt.get("format_id", "")).lower()
+                    fmt_url = fmt.get("url")
+                    vcodec = fmt.get("vcodec", "none")
+                    acodec = fmt.get("acodec", "none")
 
-            out = []
+                    if not fmt_url:
+                        continue
 
-            hd = next((f for f in progressive if str(f.get("format_id")).lower() == "hd"), None)
-            sd = next((f for f in progressive if str(f.get("format_id")).lower() == "sd"), None)
+                    # Tự động tìm luồng chỉ có tiếng (audio-only) để làm file MP3 chuẩn
+                    if vcodec == "none" and acodec != "none" and not audio_url:
+                        audio_url = fmt_url
 
-            if hd:
-                out.append({"quality": "HD Video", "desc": "Video HD (có tiếng)", "ext": "mp4", "url": hd["url"]})
-            if sd:
-                out.append({"quality": "SD Video", "desc": "Video SD (có tiếng)", "ext": "mp4", "url": sd["url"]})
+                    if "hd" in format_id:
+                        hd_url = fmt_url
+                    elif "sd" in format_id:
+                        sd_url = fmt_url
 
-            if not out:
-                best = best_by_height(progressive)
-                if best:
-                    out.append({"quality": "Video", "desc": "Video MP4 (có tiếng)", "ext": "mp4", "url": best["url"]})
+            # Lấy URL mặc định nếu không phân biệt được HD/SD
+            default_url = info.get("url")
 
-            # Reel thường chỉ có luồng tách rời: hình và tiếng là hai link khác nhau.
-            if not out:
-                vbest = best_by_height(video_only)
-                if vbest:
-                    out.append({
-                        "quality": "Video không tiếng",
-                        "desc": "Chỉ có hình. Cần ghép với âm thanh bằng ffmpeg",
+            # 1. Thêm chất lượng HD
+            if hd_url:
+                formats_list.append(
+                    {
+                        "quality": "HD Video",
+                        "desc": "Tệp Video HD chất lượng cao",
                         "ext": "mp4",
-                        "url": vbest["url"],
-                    })
+                        "url": hd_url,
+                    }
+                )
 
-            abest = best_by_height(audio_only)
-            if abest:
-                out.append({"quality": "AUDIO", "desc": "Âm thanh (định dạng m4a)", "ext": "m4a", "url": abest["url"]})
+            # 2. Thêm chất lượng SD
+            if sd_url:
+                formats_list.append(
+                    {
+                        "quality": "SD Video",
+                        "desc": "Tệp Video SD chất lượng tiêu chuẩn",
+                        "ext": "mp4",
+                        "url": sd_url,
+                    }
+                )
 
-            thumbnail = info.get("thumbnail")
-            if thumbnail:
-                out.append({"quality": "IMAGE", "desc": "Ảnh bìa video", "ext": "jpg", "url": thumbnail})
+            # Nếu không tìm thấy HD/SD riêng biệt, lấy link video chính
+            if not formats_list and default_url:
+                formats_list.append(
+                    {
+                        "quality": "HD / SD Video",
+                        "desc": "Tệp Video MP4 gốc",
+                        "ext": "mp4",
+                        "url": default_url,
+                    }
+                )
 
-            if not out:
-                raise RuntimeError("Không tìm thấy tệp video trực tiếp.")
+            # Xác định nguồn phát cho MP3
+            final_audio_url = audio_url or hd_url or sd_url or default_url
+
+            # 3. Thêm tùy chọn MP3 (Audio thực sự dạng m4a)
+            if final_audio_url:
+                formats_list.append(
+                    {
+                        "quality": "MP3",
+                        "desc": "Tệp Âm thanh MP3 chuẩn",
+                        "ext": "m4a",
+                        "url": final_audio_url,
+                    }
+                )
+
+            # 4. Thêm tùy chọn Ảnh bìa / Thumbnail
+            thumbnail_url = info.get("thumbnail")
+            if thumbnail_url:
+                formats_list.append(
+                    {
+                        "quality": "IMAGE",
+                        "desc": "Ảnh bìa video (Hình ảnh)",
+                        "ext": "jpg",
+                        "url": thumbnail_url,
+                    }
+                )
+
+            if not formats_list:
+                raise Exception("Không tìm thấy tệp video trực tiếp.")
 
             return {
-                "title": info.get("title") or "Facebook Video",
-                "thumbnail": thumbnail,
+                "title": info.get("title") or "Facebook Story / Video",
+                "thumbnail": thumbnail_url,
                 "duration": info.get("duration_string") or "N/A",
-                "formats": out,
+                "formats": formats_list,
             }
 
-    except HTTPException:
-        raise
     except Exception as e:
-        err = str(e)
-        # Ghi lỗi thật vào log để biết nguyên nhân. Đừng nuốt mất lỗi.
-        logger.exception("Lỗi khi xử lý %s: %s", target_url, err)
-        low = err.lower()
-        if "login" in low or "log in" in low or "private" in low:
+        err_msg = str(e)
+        if "login.php" in err_msg:
             raise HTTPException(
                 status_code=400,
-                detail="Video riêng tư hoặc Facebook yêu cầu đăng nhập. Chỉ hỗ trợ nội dung công khai.",
+                detail="Video riêng tư yêu cầu đăng nhập. Hệ thống chỉ hỗ trợ Video Công Khai (Public), Reels và Story!",
             )
+
         raise HTTPException(
             status_code=400,
             detail="Không thể bóc tách nội dung này. Vui lòng kiểm tra lại đường link!",
